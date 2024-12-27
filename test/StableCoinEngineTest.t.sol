@@ -343,4 +343,90 @@ contract StableCoinEngineTest is Test {
         engine.update(1100);
         assertEq(engine.getObservationsCount(), 2);
     }
+
+    function testIsLiquidatable() public {
+        // Setup initial price at $50.00
+        engine.update(50_00000000);
+        vm.warp(block.timestamp + 5 minutes);
+        engine.update(50_00000000);
+        
+        emit log_named_uint("Initial TWAP", engine.getTWAP());
+
+        // Create a test position
+        StableCoinEngine.Position memory position = StableCoinEngine.Position({
+            collateralAmount: 1e18,
+            debtAmount: 100e18,
+            liquidationPrice: 47_00000000, // $47.00
+            lastInterestUpdate: block.timestamp
+        });
+
+        // Store the position using storage slot manipulation
+        bytes32 positionSlot = keccak256(abi.encode(user, uint256(6))); // slot 6 is positions mapping
+        vm.store(address(engine), positionSlot, bytes32(position.collateralAmount));
+        vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(user, uint256(6)))) + 1), bytes32(position.debtAmount));
+        vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(user, uint256(6)))) + 2), bytes32(position.liquidationPrice));
+        vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(user, uint256(6)))) + 3), bytes32(position.lastInterestUpdate));
+
+        // Test 1: Position should not be liquidatable when price is above liquidation price
+        emit log_named_uint("TWAP before price drops", engine.getTWAP());
+        assertFalse(engine.isLiquidatable(user), "Position should not be liquidatable at $50.00");
+
+        // Test 2: Position should be liquidatable when price drops below liquidation price
+        // First drop to $48.00 (4% drop)
+        vm.warp(block.timestamp + 30 minutes);
+        engine.update(48_00000000);
+        emit log_named_uint("TWAP after first drop", engine.getTWAP());
+        
+        // Then drop to $46.00 (4.17% drop, within 10% limit)
+        vm.warp(block.timestamp + 30 minutes);
+        engine.update(46_00000000);
+        emit log_named_uint("TWAP after second drop", engine.getTWAP());
+        
+        // Wait longer for TWAP to update (4 hours)
+        vm.warp(block.timestamp + 4 hours);
+        engine.update(46_00000000);
+        
+        // Wait another 4 hours to let TWAP fully reflect the lower price
+        vm.warp(block.timestamp + 4 hours);
+        engine.update(46_00000000);
+        
+        emit log_named_uint("TWAP after waiting", engine.getTWAP());
+        emit log_named_uint("Liquidation price", position.liquidationPrice);
+        
+        assertTrue(engine.isLiquidatable(user), "Position should be liquidatable at $46.00");
+
+        // Test 3: Empty position should not be liquidatable
+        address emptyUser = address(0x2);
+        StableCoinEngine.Position memory emptyPosition = StableCoinEngine.Position({
+            collateralAmount: 0,
+            debtAmount: 0,
+            liquidationPrice: 0,
+            lastInterestUpdate: 0
+        });
+
+        positionSlot = keccak256(abi.encode(emptyUser, uint256(6)));
+        vm.store(address(engine), positionSlot, bytes32(emptyPosition.collateralAmount));
+        vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(emptyUser, uint256(6)))) + 1), bytes32(emptyPosition.debtAmount));
+        vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(emptyUser, uint256(6)))) + 2), bytes32(emptyPosition.liquidationPrice));
+        vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(emptyUser, uint256(6)))) + 3), bytes32(emptyPosition.lastInterestUpdate));
+
+        assertFalse(engine.isLiquidatable(emptyUser), "Empty position should not be liquidatable");
+
+        // Test 4: Position with debt but no liquidation price should not be liquidatable
+        address invalidUser = address(0x3);
+        StableCoinEngine.Position memory invalidPosition = StableCoinEngine.Position({
+            collateralAmount: 1e18,
+            debtAmount: 100e18,
+            liquidationPrice: 0,
+            lastInterestUpdate: block.timestamp
+        });
+
+        positionSlot = keccak256(abi.encode(invalidUser, uint256(6)));
+        vm.store(address(engine), positionSlot, bytes32(invalidPosition.collateralAmount));
+        vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(invalidUser, uint256(6)))) + 1), bytes32(invalidPosition.debtAmount));
+        vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(invalidUser, uint256(6)))) + 2), bytes32(invalidPosition.liquidationPrice));
+        vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(invalidUser, uint256(6)))) + 3), bytes32(invalidPosition.lastInterestUpdate));
+
+        assertFalse(engine.isLiquidatable(invalidUser), "Position without liquidation price should not be liquidatable");
+    }
 }

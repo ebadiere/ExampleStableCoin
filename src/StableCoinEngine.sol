@@ -19,6 +19,13 @@ contract StableCoinEngine is Ownable {
         uint256 price;
     }
 
+    struct Position {
+        uint256 collateralAmount;
+        uint256 debtAmount;
+        uint256 liquidationPrice;    // Price at which position becomes unsafe
+        uint256 lastInterestUpdate;
+    }
+
     address public immutable stableCoin;
     address public immutable collateralToken;
 
@@ -35,7 +42,15 @@ contract StableCoinEngine is Ownable {
     uint256 public constant MIN_UPDATE_DELAY = 5 minutes; // Minimum time between updates
     
     Observation[] public observations;
-
+    mapping(address => Position) public positions;
+    
+    event PositionLiquidated(
+        address indexed owner,
+        address indexed liquidator,
+        uint256 debtRepaid,
+        uint256 collateralLiquidated,
+        uint256 bonus
+    );
     event Update(uint256 currentPrice);
     event TWAP(uint256 twap);
 
@@ -180,4 +195,9 @@ contract StableCoinEngine is Ownable {
         // We multiply by PRICE_PRECISION and divide by 1e16 to maintain precision
         return (mintAmount * baseCollateralRatio * PRICE_PRECISION) / (collateralPrice * 1e18);
     }    
+
+    function isLiquidatable(address user) public view returns (bool) {
+        Position storage position = positions[user];
+        return position.debtAmount > 0 && position.liquidationPrice > 0 && getTWAP() < position.liquidationPrice;   
+    }
 }
