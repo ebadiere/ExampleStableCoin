@@ -22,6 +22,13 @@ contract StableCoinEngine is Ownable {
     address public immutable stableCoin;
     address public immutable collateralToken;
 
+    // Core parameters
+    uint256 public constant PRICE_PRECISION = 1e18;
+    uint256 public baseCollateralRatio = 150e16; // 150%
+    uint256 public liquidationThreshold = 120e16; // 120%
+    uint256 public mintFee = 1e16; // 1%
+    uint256 public burnFee = 5e15;  // 0.5%    
+
     uint256 public constant PERIOD = 1 hours; // Time window
     uint256 public constant MAX_PRICE_CHANGE_PERCENTAGE = 10; // 10% max price change
     uint256 public constant MAX_PRICE_AGE = 1 days; // Maximum age of price data
@@ -128,23 +135,29 @@ contract StableCoinEngine is Ownable {
     }
     
     function getTWAP() 
-        external 
+        public 
+        view
         sufficientData 
         notStaleData 
         returns (uint256) 
     {
         uint256 timeWeightedPrice;
         uint256 totalTime;
+        uint256 lastIndex = observations.length - 1;
         
+        // Calculate time-weighted price for all periods except the last one
         for (uint i = 1; i < observations.length; i++) {
             uint256 timeElapsed = observations[i].timestamp - observations[i-1].timestamp;
             timeWeightedPrice += observations[i-1].price * timeElapsed;
             totalTime += timeElapsed;
         }
+
+        // Add the last period using current time
+        uint256 lastTimeElapsed = block.timestamp - observations[lastIndex].timestamp;
+        timeWeightedPrice += observations[lastIndex].price * lastTimeElapsed;
+        totalTime += lastTimeElapsed;
         
-        uint256 twap = timeWeightedPrice / totalTime;
-        emit TWAP(twap);
-        return twap;
+        return timeWeightedPrice / totalTime;
     }
 
     function getLatestPrice() external view hasData returns (uint256) {
@@ -154,4 +167,17 @@ contract StableCoinEngine is Ownable {
     function getObservationsCount() external view returns (uint256) {
         return observations.length;
     }
+
+    function getCollateralPrice() public view returns (uint256) {
+        uint256 twap = getTWAP();
+        return twap * PRICE_PRECISION / 1e8;
+    }    
+
+    function calculateRequiredCollateral(uint256 mintAmount) public view returns (uint256) {
+        uint256 collateralPrice = getCollateralPrice();
+        // Both mintAmount and collateralPrice are in PRICE_PRECISION (1e18)
+        // baseCollateralRatio is in 1e16 (150e16 = 150%)
+        // We multiply by PRICE_PRECISION and divide by 1e16 to maintain precision
+        return (mintAmount * baseCollateralRatio * PRICE_PRECISION) / (collateralPrice * 1e18);
+    }    
 }

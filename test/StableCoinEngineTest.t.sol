@@ -51,6 +51,11 @@ contract StableCoinEngineTest is Test {
         assertEq(engine.MAX_PRICE_CHANGE_PERCENTAGE(), 10);
         assertEq(engine.MAX_PRICE_AGE(), 1 days);
         assertEq(engine.MIN_UPDATE_DELAY(), 5 minutes);
+        assertEq(engine.PRICE_PRECISION(), 1e18);
+        assertEq(engine.baseCollateralRatio(), 150e16); // 150%
+        assertEq(engine.liquidationThreshold(), 120e16); // 120%
+        assertEq(engine.mintFee(), 1e16); // 1%
+        assertEq(engine.burnFee(), 5e15); // 0.5%
     }
 
     // Constructor Validation Tests
@@ -232,18 +237,100 @@ contract StableCoinEngineTest is Test {
         // Third observation at t=10min: price=1200
         vm.warp(block.timestamp + 5 minutes);
         engine.update(1200);
+
+        // Wait 5 minutes to test current time impact
+        vm.warp(block.timestamp + 5 minutes);
         
         // TWAP calculation:
         // Time period 1: 1000 * 5 minutes = 5000 * minutes
         // Time period 2: 1100 * 5 minutes = 5500 * minutes
-        // Total time = 10 minutes
-        // TWAP = (5000 + 5500) / 10 = 1050
-        uint256 expectedTWAP = 1050;
+        // Time period 3: 1200 * 5 minutes = 6000 * minutes
+        // Total time = 15 minutes
+        // TWAP = (5000 + 5500 + 6000) / 15 = 1100
+        uint256 expectedTWAP = 1100;
         
-        vm.expectEmit(address(engine));
-        emit TWAP(expectedTWAP);
         uint256 twap = engine.getTWAP();
         assertEq(twap, expectedTWAP);
+    }
+
+    function testGetCollateralPrice() public {
+        // First observation at t=0 (price in 1e8 precision)
+        engine.update(50_00000000); // $50.00
+        
+        // Second observation at t=5min: price=$55.00
+        vm.warp(block.timestamp + 5 minutes);
+        engine.update(55_00000000);
+
+        // Wait 5 minutes to test current time impact
+        vm.warp(block.timestamp + 5 minutes);
+        
+        // TWAP calculation:
+        // Period 1: 50_00000000 * 5 minutes = 250_00000000 * minutes (first price * time to second observation)
+        // Period 2: 55_00000000 * 5 minutes = 275_00000000 * minutes (last price * time to current)
+        // Total time = 10 minutes
+        // TWAP = (250_00000000 + 275_00000000) / 10 = 52.50_00000000 (in 1e8 precision)
+        // Expected collateral price = 52.50_00000000 * 1e18 / 1e8 = 52.50e18
+        uint256 expectedPrice = 52500000000000000000;
+        
+        uint256 collateralPrice = engine.getCollateralPrice();
+        assertEq(collateralPrice, expectedPrice);
+    }
+
+    function testCalculateRequiredCollateral() public {
+        // Setup: Set collateral price to $50.00
+        engine.update(50_00000000); // Initial price in 1e8 precision
+        vm.warp(block.timestamp + 5 minutes);
+        engine.update(52_50000000); // $52.50 (5% increase)
+
+        // Wait 5 minutes to test current time impact
+        vm.warp(block.timestamp + 5 minutes);
+        
+        // Test Case 1: Mint 100 stablecoins
+        // TWAP calculation:
+        // Period 1: 50_00000000 * 5 minutes = 250_00000000 * minutes (first price * time to second observation)
+        // Period 2: 52_50000000 * 5 minutes = 262_50000000 * minutes (last price * time to current)
+        // Total time = 10 minutes
+        // TWAP = (250_00000000 + 262_50000000) / 10 = 51.25_00000000 (in 1e8 precision)
+        // Collateral price = 51.25_00000000 * 1e18 / 1e8 = 51.25e18
+        // Required collateral = (100e18 * 150e16 * 1e18) / (51.25e18 * 1e18)
+        // ≈ 2.926829268292682926e18 collateral tokens
+        uint256 mintAmount = 100e18;
+        uint256 expectedCollateral = 2926829268292682926;
+        uint256 requiredCollateral = engine.calculateRequiredCollateral(mintAmount);
+        assertEq(requiredCollateral, expectedCollateral, "Case 1: Basic calculation failed");
+
+        // Test Case 2: Mint 1 stablecoin (test small amounts)
+        mintAmount = 1e18;
+        expectedCollateral = 29268292682926829; // ≈ 0.02926829268292682926 collateral tokens
+        requiredCollateral = engine.calculateRequiredCollateral(mintAmount);
+        assertEq(requiredCollateral, expectedCollateral, "Case 2: Small amount calculation failed");
+
+        // Test Case 3: Mint 0 stablecoins (should return 0)
+        mintAmount = 0;
+        expectedCollateral = 0;
+        requiredCollateral = engine.calculateRequiredCollateral(mintAmount);
+        assertEq(requiredCollateral, expectedCollateral, "Case 3: Zero amount calculation failed");
+
+        // Test Case 4: Test with different collateral price
+        // Update price to $53.00 (within 5% increase)
+        vm.warp(block.timestamp + 5 minutes);
+        engine.update(53_00000000);
+
+        // Wait 5 minutes to test current time impact
+        vm.warp(block.timestamp + 5 minutes);
+        
+        // TWAP calculation for Case 4:
+        // Period 1: 52_50000000 * 5 minutes = 262_50000000 * minutes (first price * time to second observation)
+        // Period 2: 53_00000000 * 5 minutes = 265_00000000 * minutes (last price * time to current)
+        // Total time = 10 minutes
+        // TWAP = (262_50000000 + 265_00000000) / 10 = 52.75_00000000 (in 1e8 precision)
+        // Collateral price = 52.75_00000000 * 1e18 / 1e8 = 52.75e18
+        // Required collateral = (100e18 * 150e16 * 1e18) / (52.75e18 * 1e18)
+        // ≈ 2.884615384615384615e18 collateral tokens
+        mintAmount = 100e18;
+        expectedCollateral = 2884615384615384615;
+        requiredCollateral = engine.calculateRequiredCollateral(mintAmount);
+        assertEq(requiredCollateral, expectedCollateral, "Case 4: Different price calculation failed");
     }
 
     function testGetObservationsCount() public {
