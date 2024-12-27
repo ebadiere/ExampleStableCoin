@@ -1,32 +1,9 @@
-// Layout of Contract:
-// version
-// imports
-// errors
-// interfaces, libraries, contracts
-// Type declarations
-// State variables
-// Events
-// Modifiers
-// Functions
-
-// Layout of Functions:
-// constructor
-// receive function (if exists)
-// fallback function (if exists)
-// external
-// public
-// internal
-// private
-// internal & private view & pure functions
-// external & public view & pure functions
-
 // SPDX-License-Identifier: MIT
 
 pragma solidity 0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-
 
 /**
  * @title StableCoinEngine
@@ -36,32 +13,112 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * external process or oracle will run the update function.
  */
 
- contract StableCoinEngine is Ownable {
-
+contract StableCoinEngine is Ownable {
     struct Observation {
         uint256 timestamp;
         uint256 price;
     }
 
-    address public stableCoin;
-    address public collateralToken;
+    address public immutable stableCoin;
+    address public immutable collateralToken;
 
     uint256 public constant PERIOD = 1 hours; // Time window
-    Observation[] public observations;    
+    uint256 public constant MAX_PRICE_CHANGE_PERCENTAGE = 10; // 10% max price change
+    uint256 public constant MAX_PRICE_AGE = 1 days; // Maximum age of price data
+    uint256 public constant MIN_UPDATE_DELAY = 5 minutes; // Minimum time between updates
+    
+    Observation[] public observations;
 
     event Update(uint256 currentPrice);
     event TWAP(uint256 twap);
+
+    error ZeroAddress();
+    error SameTokens();
+    error InvalidERC20();
+    error ZeroPrice();
+    error PriceChangeTooBig(uint256 oldPrice, uint256 newPrice);
+    error UpdateTooFrequent(uint256 timeSinceLastUpdate, uint256 requiredDelay);
+    error StaleData(uint256 oldestTimestamp);
+    error InsufficientData();
+    error NoData();
+
+    modifier validPrice(uint256 price) {
+        if (price == 0) revert ZeroPrice();
+        _;
+    }
+
+    modifier notTooFrequent() {
+        if (observations.length > 0) {
+            uint256 timeSinceLastUpdate = block.timestamp - observations[observations.length - 1].timestamp;
+            if (timeSinceLastUpdate < MIN_UPDATE_DELAY) {
+                revert UpdateTooFrequent(timeSinceLastUpdate, MIN_UPDATE_DELAY);
+            }
+        }
+        _;
+    }
+
+    modifier notStaleData() {
+        if (observations.length > 0 && block.timestamp - observations[0].timestamp > MAX_PRICE_AGE) {
+            revert StaleData(observations[0].timestamp);
+        }
+        _;
+    }
+
+    modifier sufficientData() {
+        if (observations.length < 2) revert InsufficientData();
+        _;
+    }
+
+    modifier hasData() {
+        if (observations.length == 0) revert NoData();
+        _;
+    }
+
+    modifier priceChangeInRange(uint256 newPrice) {
+        if (observations.length > 0) {
+            uint256 lastPrice = observations[observations.length - 1].price;
+            uint256 priceChange = newPrice > lastPrice 
+                ? ((newPrice - lastPrice) * 100) / lastPrice 
+                : ((lastPrice - newPrice) * 100) / lastPrice;
+            
+            if (priceChange > MAX_PRICE_CHANGE_PERCENTAGE) {
+                revert PriceChangeTooBig(lastPrice, newPrice);
+            }
+        }
+        _;
+    }
 
     constructor(
         address _stableCoin,
         address _collateralToken,
         address initialOwner
     ) Ownable(initialOwner) {
+        if (_stableCoin == address(0) || _collateralToken == address(0)) {
+            revert ZeroAddress();
+        }
+        if (_stableCoin == _collateralToken) {
+            revert SameTokens();
+        }
+
+        // Verify both addresses contain ERC20 contracts
+        try ERC20(_stableCoin).totalSupply() {} catch {
+            revert InvalidERC20();
+        }
+        try ERC20(_collateralToken).totalSupply() {} catch {
+            revert InvalidERC20();
+        }
+
         stableCoin = _stableCoin;
         collateralToken = _collateralToken;
     }
 
-    function update(uint256 currentPrice) external {
+    function update(uint256 currentPrice) 
+        external 
+        onlyOwner 
+        validPrice(currentPrice)
+        notTooFrequent
+        priceChangeInRange(currentPrice)
+    {
         observations.push(Observation({
             timestamp: block.timestamp,
             price: currentPrice
@@ -70,7 +127,12 @@ import "@openzeppelin/contracts/access/Ownable.sol";
         emit Update(currentPrice);
     }
     
-    function getTWAP() external returns (uint256) {
+    function getTWAP() 
+        external 
+        sufficientData 
+        notStaleData 
+        returns (uint256) 
+    {
         uint256 timeWeightedPrice;
         uint256 totalTime;
         
@@ -84,4 +146,12 @@ import "@openzeppelin/contracts/access/Ownable.sol";
         emit TWAP(twap);
         return twap;
     }
- }
+
+    function getLatestPrice() external view hasData returns (uint256) {
+        return observations[observations.length - 1].price;
+    }
+
+    function getObservationsCount() external view returns (uint256) {
+        return observations.length;
+    }
+}
