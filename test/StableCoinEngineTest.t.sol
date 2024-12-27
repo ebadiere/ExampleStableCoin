@@ -21,6 +21,9 @@ contract StableCoinEngineTest is Test {
     MockERC20 public collateral;
     address public owner;
 
+    event Update(uint256 currentPrice);
+    event TWAP(uint256 twap);
+
     function setUp() public {
         owner = address(this);
         collateral = new MockERC20();
@@ -40,6 +43,12 @@ contract StableCoinEngineTest is Test {
 
     function testUpdate() public {
         uint256 price = 1000; // $1000 per token
+        
+        // First, tell Forge what event data to expect
+        vm.expectEmit(address(engine));
+        emit Update(price);
+        
+        // Then call the function that should emit the event
         engine.update(price);
         
         (uint256 timestamp, uint256 storedPrice) = engine.observations(0);
@@ -68,8 +77,15 @@ contract StableCoinEngineTest is Test {
         vm.warp(block.timestamp + 30 minutes);
         engine.update(3000);
         
-        uint256 twap = engine.getTWAP();
         // Expected TWAP: ((1000 * 30 minutes) + (2000 * 30 minutes)) / (60 minutes) = 1500
-        assertEq(twap, 1500);
+        uint256 expectedTWAP = 1500;
+        
+        // First, tell Forge what event data to expect
+        vm.expectEmit(address(engine));
+        emit TWAP(expectedTWAP);
+        
+        // Then call the function that should emit the event
+        uint256 twap = engine.getTWAP();
+        assertEq(twap, expectedTWAP);
     }
 }

@@ -49,6 +49,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
     uint256 public constant PERIOD = 1 hours; // Time window
     Observation[] public observations;    
 
+    event Update(uint256 currentPrice);
+    event TWAP(uint256 twap);
 
     constructor(
         address _stableCoin,
@@ -64,9 +66,11 @@ import "@openzeppelin/contracts/access/Ownable.sol";
             timestamp: block.timestamp,
             price: currentPrice
         }));
+
+        emit Update(currentPrice);
     }
     
-    function getTWAP() external view returns (uint256) {
+    function getTWAP() external returns (uint256) {
         uint256 timeWeightedPrice;
         uint256 totalTime;
         
@@ -76,6 +80,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
             totalTime += timeElapsed;
         }
         
-        return timeWeightedPrice / totalTime;
+        uint256 twap = timeWeightedPrice / totalTime;
+        emit TWAP(twap);
+        return twap;
     }
  }
