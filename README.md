@@ -64,3 +64,6 @@ $ forge --help
 $ anvil --help
 $ cast --help
 ```
+
+
+This stable coin will use a uniswap like liquidity pool.
