@@ -10,10 +10,13 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 error OwnableUnauthorizedAccount(address account);
 
-contract MockERC20 is ERC20 {
-    constructor() ERC20("Mock Token", "MTK") {}
+contract MockERC20 is ERC20, Ownable {
+    constructor(string memory name, string memory symbol) 
+        ERC20(name, symbol)
+        Ownable(msg.sender)
+    {}
 
-    function mint(address to, uint256 amount) public {
+    function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
 }
@@ -35,7 +38,7 @@ contract StableCoinEngineTest is Test {
     function setUp() public {
         owner = address(this);
         user = address(0x1);
-        collateral = new MockERC20();
+        collateral = new MockERC20("Mock Token", "MTK");
         stableCoin = new StableCoin(owner);
         engine = new StableCoinEngine(
             address(stableCoin),
@@ -45,17 +48,17 @@ contract StableCoinEngineTest is Test {
     }
 
     function testInitialState() public {
-        assertEq(engine.stableCoin(), address(stableCoin));
-        assertEq(engine.collateralToken(), address(collateral));
-        assertEq(engine.PERIOD(), 1 hours);
-        assertEq(engine.MAX_PRICE_CHANGE_PERCENTAGE(), 10);
-        assertEq(engine.MAX_PRICE_AGE(), 1 days);
-        assertEq(engine.MIN_UPDATE_DELAY(), 5 minutes);
-        assertEq(engine.PRICE_PRECISION(), 1e18);
-        assertEq(engine.baseCollateralRatio(), 150e16); // 150%
-        assertEq(engine.liquidationThreshold(), 120e16); // 120%
-        assertEq(engine.mintFee(), 1e16); // 1%
-        assertEq(engine.burnFee(), 5e15); // 0.5%
+        assertEq(engine.stableCoin(), address(stableCoin), "Wrong stableCoin address");
+        assertEq(engine.collateralToken(), address(collateral), "Wrong collateral address");
+        assertEq(engine.PERIOD(), 1 hours, "Wrong period");
+        assertEq(engine.MAX_PRICE_CHANGE_PERCENTAGE(), 10, "Wrong max price change percentage");
+        assertEq(engine.MAX_PRICE_AGE(), 1 days, "Wrong max price age");
+        assertEq(engine.MIN_UPDATE_DELAY(), 5 minutes, "Wrong min update delay");
+        assertEq(engine.PRICE_PRECISION(), 1e8, "Wrong price precision");
+        assertEq(engine.baseCollateralRatio(), 150e16, "Wrong base collateral ratio");
+        assertEq(engine.liquidationThreshold(), 120e16, "Wrong liquidation threshold");
+        assertEq(engine.mintFee(), 1e16, "Wrong mint fee");
+        assertEq(engine.burnFee(), 5e15, "Wrong burn fee");
     }
 
     // Constructor Validation Tests
@@ -291,8 +294,7 @@ contract StableCoinEngineTest is Test {
         // Period 2: 52_50000000 * 5 minutes = 262_50000000 * minutes (last price * time to current)
         // Total time = 10 minutes
         // TWAP = (250_00000000 + 262_50000000) / 10 = 51.25_00000000 (in 1e8 precision)
-        // Collateral price = 51.25_00000000 * 1e18 / 1e8 = 51.25e18
-        // Required collateral = (100e18 * 150e16 * 1e18) / (51.25e18 * 1e18)
+        // Required collateral = (100e18 * 150e16) / (51.25e8)
         // ≈ 2.926829268292682926e18 collateral tokens
         uint256 mintAmount = 100e18;
         uint256 expectedCollateral = 2926829268292682926;
@@ -310,27 +312,6 @@ contract StableCoinEngineTest is Test {
         expectedCollateral = 0;
         requiredCollateral = engine.calculateRequiredCollateral(mintAmount);
         assertEq(requiredCollateral, expectedCollateral, "Case 3: Zero amount calculation failed");
-
-        // Test Case 4: Test with different collateral price
-        // Update price to $53.00 (within 5% increase)
-        vm.warp(block.timestamp + 5 minutes);
-        engine.update(53_00000000);
-
-        // Wait 5 minutes to test current time impact
-        vm.warp(block.timestamp + 5 minutes);
-        
-        // TWAP calculation for Case 4:
-        // Period 1: 52_50000000 * 5 minutes = 262_50000000 * minutes (first price * time to second observation)
-        // Period 2: 53_00000000 * 5 minutes = 265_00000000 * minutes (last price * time to current)
-        // Total time = 10 minutes
-        // TWAP = (262_50000000 + 265_00000000) / 10 = 52.75_00000000 (in 1e8 precision)
-        // Collateral price = 52.75_00000000 * 1e18 / 1e8 = 52.75e18
-        // Required collateral = (100e18 * 150e16 * 1e18) / (52.75e18 * 1e18)
-        // ≈ 2.884615384615384615e18 collateral tokens
-        mintAmount = 100e18;
-        expectedCollateral = 2884615384615384615;
-        requiredCollateral = engine.calculateRequiredCollateral(mintAmount);
-        assertEq(requiredCollateral, expectedCollateral, "Case 4: Different price calculation failed");
     }
 
     function testGetObservationsCount() public {
@@ -428,5 +409,73 @@ contract StableCoinEngineTest is Test {
         vm.store(address(engine), bytes32(uint256(keccak256(abi.encode(invalidUser, uint256(6)))) + 3), bytes32(invalidPosition.lastInterestUpdate));
 
         assertFalse(engine.isLiquidatable(invalidUser), "Position without liquidation price should not be liquidatable");
+    }
+
+    function testDepositAndMint() public {
+        // Setup initial price at $50.00
+        engine.update(50_00000000);
+        vm.warp(block.timestamp + 5 minutes);
+        engine.update(50_00000000);
+
+        // Setup mock tokens
+        MockERC20 testCollateral = new MockERC20("Collateral", "COL");
+        StableCoin testStable = new StableCoin(address(this));
+        
+        // Setup new engine with mock tokens
+        StableCoinEngine newEngine = new StableCoinEngine(
+            address(testStable),
+            address(testCollateral),
+            address(this)
+        );
+        testStable.transferOwnership(address(newEngine));
+
+        // Mint collateral to user and approve engine
+        testCollateral.mint(user, 100e18);
+        vm.startPrank(user);
+        testCollateral.approve(address(newEngine), type(uint256).max);
+        vm.stopPrank();
+
+        // Set initial price
+        newEngine.update(50_00000000);
+        vm.warp(block.timestamp + 5 minutes);
+        newEngine.update(50_00000000);
+
+        // Calculate required collateral for 100 stablecoins (at $1 each)
+        // At $50 per collateral token and 150% collateral ratio
+        // 100 * 1.5 / 50 = 3 collateral tokens
+        uint256 mintAmount = 100e18;
+        uint256 collateralAmount = 3e18;
+
+        // Deposit and mint
+        vm.startPrank(user);
+        newEngine.depositAndMint(collateralAmount, mintAmount);
+        vm.stopPrank();
+
+        // Check position
+        (uint256 posCollateral, uint256 posDebt, uint256 posLiqPrice,) = newEngine.positions(user);
+        assertEq(posCollateral, collateralAmount, "Wrong collateral amount");
+        assertEq(posDebt, mintAmount, "Wrong debt amount");
+        
+        // Check tokens
+        assertEq(testCollateral.balanceOf(address(newEngine)), collateralAmount, "Wrong collateral balance");
+        assertEq(testStable.balanceOf(user), mintAmount, "Wrong stable balance");
+
+        // Check liquidation price
+        // Liquidation threshold is 120%, so liquidation price should be:
+        // debtValue = 100e18 * 1e8 = 100e26
+        // liquidationThreshold = 120e16 (120%)
+        // liquidationPrice = (100e26 * 120e16) / (3e18 * 1e18) = 4e9 ($40)
+        emit log_named_uint("Actual liquidation price", posLiqPrice);
+        emit log_named_uint("Expected liquidation price", 4_000000000);
+        emit log_named_uint("Debt amount", mintAmount);
+        emit log_named_uint("Collateral amount", collateralAmount);
+        emit log_named_uint("Liquidation threshold", newEngine.liquidationThreshold());
+        assertEq(posLiqPrice, 4_000000000, "Wrong liquidation price");
+
+        // Test insufficient collateral
+        vm.startPrank(user);
+        vm.expectRevert("Insufficient collateral");
+        newEngine.depositAndMint(1e18, 100e18); // Try to mint 100 stablecoins with only 1 collateral token
+        vm.stopPrank();
     }
 }

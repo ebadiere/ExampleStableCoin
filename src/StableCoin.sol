@@ -27,8 +27,12 @@ pragma solidity 0.8.20;
 import { ERC20Burnable, ERC20 } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
+interface IStableCoin {
+    function mint(address to, uint256 amount) external;
+    function burn(uint256 amount) external;
+}
 
-contract StableCoin is ERC20Burnable, Ownable {
+contract StableCoin is ERC20Burnable, Ownable, IStableCoin {
     constructor(address initialOwner) 
         ERC20("StableCoin", "SC") 
         Ownable(initialOwner) 
@@ -38,7 +42,7 @@ contract StableCoin is ERC20Burnable, Ownable {
         _mint(to, amount);
     }
 
-    function burn(uint256 amount) public override {
+    function burn(uint256 amount) public override(ERC20Burnable, IStableCoin) {
         super.burn(amount);
     }
 }

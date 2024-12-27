@@ -3,7 +3,9 @@
 pragma solidity 0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "./StableCoin.sol";
 
 /**
  * @title StableCoinEngine
@@ -30,7 +32,7 @@ contract StableCoinEngine is Ownable {
     address public immutable collateralToken;
 
     // Core parameters
-    uint256 public constant PRICE_PRECISION = 1e18;
+    uint256 public constant PRICE_PRECISION = 1e8;  // Changed from 1e18 to match price feed precision
     uint256 public baseCollateralRatio = 150e16; // 150%
     uint256 public liquidationThreshold = 120e16; // 120%
     uint256 public mintFee = 1e16; // 1%
@@ -53,6 +55,12 @@ contract StableCoinEngine is Ownable {
     );
     event Update(uint256 currentPrice);
     event TWAP(uint256 twap);
+    event PositionUpdated(
+        address indexed user,
+        uint256 collateralAmount,
+        uint256 debtAmount,
+        uint256 liquidationPrice
+    );
 
     error ZeroAddress();
     error SameTokens();
@@ -156,6 +164,85 @@ contract StableCoinEngine is Ownable {
         notStaleData 
         returns (uint256) 
     {
+        require(observations.length > 0, "No price data");
+        require(
+            block.timestamp - observations[observations.length - 1].timestamp <= MAX_PRICE_AGE,
+            "Price data too old"
+        );
+        
+        uint256 twap = calculateTWAP();
+        return twap;  // Price is already in 1e8 precision
+    }
+
+    function getLatestPrice() external view hasData returns (uint256) {
+        return observations[observations.length - 1].price;
+    }
+
+    function getObservationsCount() external view returns (uint256) {
+        return observations.length;
+    }
+
+    function getCollateralPrice() public view returns (uint256) {
+        require(observations.length > 0, "No price data");
+        require(
+            block.timestamp - observations[observations.length - 1].timestamp <= MAX_PRICE_AGE,
+            "Price data too old"
+        );
+        
+        uint256 twap = getTWAP();
+        return twap * 1e18 / PRICE_PRECISION;  // Convert from 1e8 to 1e18
+    }    
+
+    function calculateRequiredCollateral(uint256 mintAmount) public view returns (uint256) {
+        // Example: Mint 100 stablecoins at $1 each with 150% collateral ratio
+        // collateralPrice = $50 (in 1e8 precision)
+        // mintAmount = 100e18, baseCollateralRatio = 150e16
+        // numerator = 100e18 * 150e16 = 15000e34
+        // denominator = 50e8 = 5e9
+        // result = (15000e34) / (5e9) = 2.926829268292682926e18
+        uint256 collateralPrice = getTWAP();
+        uint256 numerator = mintAmount * baseCollateralRatio;
+        uint256 denominator = collateralPrice * 1e10;  // Scale up to match numerator precision
+        return numerator / denominator;
+    }    
+
+    function isLiquidatable(address user) public view returns (bool) {
+        Position storage position = positions[user];
+        return position.debtAmount > 0 && position.liquidationPrice > 0 && getTWAP() < position.liquidationPrice;   
+    }
+
+    function depositAndMint(uint256 collateralAmount, uint256 mintAmount) external {
+        // Check that the collateral amount is sufficient
+        uint256 requiredCollateral = calculateRequiredCollateral(mintAmount);
+        require(collateralAmount >= requiredCollateral, "Insufficient collateral");
+
+        // Calculate liquidation price (120% of the debt value in collateral terms)
+        // Example: 100 stablecoins with 3 collateral tokens and 120% threshold
+        // debtValue = 100e18 * 1e8 = 100e26
+        // liquidationThreshold = 120e16 (120%)
+        // liquidationPrice = (100e26 * 120e16) / (3e18 * 1e18) = 40e6 ($40)
+        uint256 scaledDebtValue = mintAmount * PRICE_PRECISION;
+        uint256 numerator = scaledDebtValue * liquidationThreshold;
+        uint256 liquidationPrice = numerator / collateralAmount / 1e18;
+
+        // Transfer collateral from user
+        SafeERC20.safeTransferFrom(IERC20(collateralToken), msg.sender, address(this), collateralAmount);
+
+        // Update position
+        Position storage position = positions[msg.sender];
+        position.collateralAmount += collateralAmount;
+        position.debtAmount += mintAmount;
+        position.liquidationPrice = liquidationPrice;
+        position.lastInterestUpdate = block.timestamp;
+
+        // Mint stablecoins
+        IStableCoin(stableCoin).mint(msg.sender, mintAmount);
+
+        emit PositionUpdated(msg.sender, position.collateralAmount, position.debtAmount, position.liquidationPrice);
+    }
+
+    function calculateTWAP() internal view returns (uint256) {
+        // Calculate time-weighted average price, maintaining 1e8 precision
         uint256 timeWeightedPrice;
         uint256 totalTime;
         uint256 lastIndex = observations.length - 1;
@@ -172,32 +259,6 @@ contract StableCoinEngine is Ownable {
         timeWeightedPrice += observations[lastIndex].price * lastTimeElapsed;
         totalTime += lastTimeElapsed;
         
-        return timeWeightedPrice / totalTime;
-    }
-
-    function getLatestPrice() external view hasData returns (uint256) {
-        return observations[observations.length - 1].price;
-    }
-
-    function getObservationsCount() external view returns (uint256) {
-        return observations.length;
-    }
-
-    function getCollateralPrice() public view returns (uint256) {
-        uint256 twap = getTWAP();
-        return twap * PRICE_PRECISION / 1e8;
-    }    
-
-    function calculateRequiredCollateral(uint256 mintAmount) public view returns (uint256) {
-        uint256 collateralPrice = getCollateralPrice();
-        // Both mintAmount and collateralPrice are in PRICE_PRECISION (1e18)
-        // baseCollateralRatio is in 1e16 (150e16 = 150%)
-        // We multiply by PRICE_PRECISION and divide by 1e16 to maintain precision
-        return (mintAmount * baseCollateralRatio * PRICE_PRECISION) / (collateralPrice * 1e18);
-    }    
-
-    function isLiquidatable(address user) public view returns (bool) {
-        Position storage position = positions[user];
-        return position.debtAmount > 0 && position.liquidationPrice > 0 && getTWAP() < position.liquidationPrice;   
+        return timeWeightedPrice / totalTime;  // Price is in 1e8 precision
     }
 }
