@@ -37,6 +37,7 @@ contract StableCoinEngine is Ownable {
     uint256 public liquidationThreshold = 120e16; // 120%
     uint256 public mintFee = 1e16; // 1%
     uint256 public burnFee = 5e15;  // 0.5%    
+    uint256 public liquidationBonus = 10e16; // 10% bonus for liquidators
 
     uint256 public constant PERIOD = 1 hours; // Time window
     uint256 public constant MAX_PRICE_CHANGE_PERCENTAGE = 10; // 10% max price change
@@ -71,9 +72,16 @@ contract StableCoinEngine is Ownable {
     error StaleData(uint256 oldestTimestamp);
     error InsufficientData();
     error NoData();
+    error NotLiquidatable();
+    error InsufficientRepayment();
 
     modifier validPrice(uint256 price) {
         if (price == 0) revert ZeroPrice();
+        _;
+    }
+
+    modifier hasData() {
+        if (observations.length == 0) revert NoData();
         _;
     }
 
@@ -88,8 +96,8 @@ contract StableCoinEngine is Ownable {
     }
 
     modifier notStaleData() {
-        if (observations.length > 0 && block.timestamp - observations[0].timestamp > MAX_PRICE_AGE) {
-            revert StaleData(observations[0].timestamp);
+        if (observations.length > 0 && block.timestamp - observations[observations.length - 1].timestamp > MAX_PRICE_AGE) {
+            revert StaleData(observations[observations.length - 1].timestamp);
         }
         _;
     }
@@ -99,20 +107,14 @@ contract StableCoinEngine is Ownable {
         _;
     }
 
-    modifier hasData() {
-        if (observations.length == 0) revert NoData();
-        _;
-    }
-
     modifier priceChangeInRange(uint256 newPrice) {
         if (observations.length > 0) {
-            uint256 lastPrice = observations[observations.length - 1].price;
-            uint256 priceChange = newPrice > lastPrice 
-                ? ((newPrice - lastPrice) * 100) / lastPrice 
-                : ((lastPrice - newPrice) * 100) / lastPrice;
-            
-            if (priceChange > MAX_PRICE_CHANGE_PERCENTAGE) {
-                revert PriceChangeTooBig(lastPrice, newPrice);
+            uint256 oldPrice = observations[observations.length - 1].price;
+            uint256 maxChange = oldPrice * MAX_PRICE_CHANGE_PERCENTAGE / 100;
+            uint256 minPrice = oldPrice > maxChange ? oldPrice - maxChange : 0;
+            uint256 maxPrice = oldPrice + maxChange;
+            if (newPrice < minPrice || newPrice > maxPrice) {
+                revert PriceChangeTooBig(oldPrice, newPrice);
             }
         }
         _;
@@ -147,6 +149,7 @@ contract StableCoinEngine is Ownable {
         onlyOwner 
         validPrice(currentPrice)
         notTooFrequent
+        notStaleData
         priceChangeInRange(currentPrice)
     {
         observations.push(Observation({
@@ -160,16 +163,11 @@ contract StableCoinEngine is Ownable {
     function getTWAP() 
         public 
         view
+        hasData
         sufficientData 
         notStaleData 
         returns (uint256) 
     {
-        require(observations.length > 0, "No price data");
-        require(
-            block.timestamp - observations[observations.length - 1].timestamp <= MAX_PRICE_AGE,
-            "Price data too old"
-        );
-        
         uint256 twap = calculateTWAP();
         return twap;  // Price is already in 1e8 precision
     }
@@ -182,18 +180,12 @@ contract StableCoinEngine is Ownable {
         return observations.length;
     }
 
-    function getCollateralPrice() public view returns (uint256) {
-        require(observations.length > 0, "No price data");
-        require(
-            block.timestamp - observations[observations.length - 1].timestamp <= MAX_PRICE_AGE,
-            "Price data too old"
-        );
-        
+    function getCollateralPrice() public view hasData returns (uint256) {
         uint256 twap = getTWAP();
         return twap * 1e18 / PRICE_PRECISION;  // Convert from 1e8 to 1e18
     }    
 
-    function calculateRequiredCollateral(uint256 mintAmount) public view returns (uint256) {
+    function calculateRequiredCollateral(uint256 mintAmount) public view hasData returns (uint256) {
         // Example: Mint 100 stablecoins at $1 each with 150% collateral ratio
         // collateralPrice = $50 (in 1e8 precision)
         // mintAmount = 100e18, baseCollateralRatio = 150e16
@@ -206,9 +198,71 @@ contract StableCoinEngine is Ownable {
         return numerator / denominator;
     }    
 
-    function isLiquidatable(address user) public view returns (bool) {
+    function isLiquidatable(address user) public view hasData returns (bool) {
         Position storage position = positions[user];
         return position.debtAmount > 0 && position.liquidationPrice > 0 && getTWAP() < position.liquidationPrice;   
+    }
+
+    function liquidate(address user, uint256 debtToRepay) external {
+        // Check if position is liquidatable
+        if (!isLiquidatable(user)) {
+            revert NotLiquidatable();
+        }
+
+        Position storage position = positions[user];
+        if (debtToRepay > position.debtAmount) {
+            revert InsufficientRepayment();
+        }
+
+        // Calculate collateral to liquidate based on current TWAP
+        uint256 collateralPrice = getTWAP();
+        uint256 collateralToLiquidate = (debtToRepay * PRICE_PRECISION) / collateralPrice;
+
+        // Calculate bonus (10% of liquidated collateral)
+        uint256 bonus = (collateralToLiquidate * liquidationBonus) / 1e18;
+        uint256 totalCollateralToTransfer = collateralToLiquidate + bonus;
+
+        // Ensure we don't liquidate more than available
+        require(totalCollateralToTransfer <= position.collateralAmount, "Insufficient collateral in position");
+
+        // Transfer stablecoins from liquidator to contract
+        SafeERC20.safeTransferFrom(IERC20(stableCoin), msg.sender, address(this), debtToRepay);
+
+        // Update position
+        position.collateralAmount -= totalCollateralToTransfer;
+        position.debtAmount -= debtToRepay;
+
+        // If position is fully liquidated, reset liquidation price
+        if (position.debtAmount == 0) {
+            position.liquidationPrice = 0;
+            position.collateralAmount = 0;
+        } else {
+            // Recalculate liquidation price for remaining position
+            uint256 scaledDebtValue = position.debtAmount * PRICE_PRECISION;
+            uint256 numerator = scaledDebtValue * liquidationThreshold;
+            position.liquidationPrice = numerator / position.collateralAmount / 1e18;
+        }
+
+        emit PositionLiquidated(
+            user,
+            msg.sender,
+            debtToRepay,
+            collateralToLiquidate,
+            bonus
+        );
+
+        emit PositionUpdated(
+            user,
+            position.collateralAmount,
+            position.debtAmount,
+            position.liquidationPrice
+        );
+
+        // Burn the repaid debt
+        IStableCoin(stableCoin).burn(debtToRepay);
+
+        // Transfer collateral to liquidator
+        SafeERC20.safeTransfer(IERC20(collateralToken), msg.sender, totalCollateralToTransfer);
     }
 
     function depositAndMint(uint256 collateralAmount, uint256 mintAmount) external {
