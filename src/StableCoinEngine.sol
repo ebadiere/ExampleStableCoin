@@ -46,7 +46,9 @@ contract StableCoinEngine is Ownable {
     
     Observation[] public observations;
     mapping(address => Position) public positions;
-    
+    address[] public users;
+    mapping(address => bool) public isUser;
+
     event PositionLiquidated(
         address indexed owner,
         address indexed liquidator,
@@ -118,6 +120,17 @@ contract StableCoinEngine is Ownable {
             }
         }
         _;
+    }
+
+    function addUser(address user) internal {
+        if (!isUser[user]) {
+            users.push(user);
+            isUser[user] = true;
+        }
+    }
+
+    function getUsers() external view returns (address[] memory) {
+        return users;
     }
 
     constructor(
@@ -269,6 +282,9 @@ contract StableCoinEngine is Ownable {
         // Check that the collateral amount is sufficient
         uint256 requiredCollateral = calculateRequiredCollateral(mintAmount);
         require(collateralAmount >= requiredCollateral, "Insufficient collateral");
+
+        // Add user to list if not already present
+        addUser(msg.sender);
 
         // Calculate liquidation price (120% of the debt value in collateral terms)
         // Example: 100 stablecoins with 3 collateral tokens and 120% threshold
