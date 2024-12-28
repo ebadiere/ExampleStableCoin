@@ -18,19 +18,11 @@ contract DeployStableCoin is Script {
         StableCoinEngine engineImpl = new StableCoinEngine();
 
         // Prepare initialization data
-        bytes memory stableCoinData = abi.encodeWithSelector(
-            StableCoin.initialize.selector,
-            "StableCoin",
-            "SC",
-            address(engineImpl)
-        );
+        bytes memory stableCoinData =
+            abi.encodeWithSelector(StableCoin.initialize.selector, "StableCoin", "SC", address(engineImpl));
 
         // Deploy StableCoin proxy first
-        StableCoinProxy stableCoinProxy = new StableCoinProxy(
-            address(stableCoinImpl),
-            proxyAdmin,
-            stableCoinData
-        );
+        StableCoinProxy stableCoinProxy = new StableCoinProxy(address(stableCoinImpl), proxyAdmin, stableCoinData);
 
         // Then deploy Engine proxy with correct stablecoin address
         bytes memory engineData = abi.encodeWithSelector(
@@ -39,11 +31,7 @@ contract DeployStableCoin is Script {
             address(stableCoinProxy)
         );
 
-        StableCoinProxy engineProxy = new StableCoinProxy(
-            address(engineImpl),
-            proxyAdmin,
-            engineData
-        );
+        StableCoinProxy engineProxy = new StableCoinProxy(address(engineImpl), proxyAdmin, engineData);
 
         vm.stopBroadcast();
 

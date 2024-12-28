@@ -11,7 +11,7 @@ import "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 contract MockCollateralToken is ERC20Upgradeable {
     function initialize() external initializer {
         __ERC20_init("Mock Token", "MTK");
-        _mint(msg.sender, 1000000e18);
+        _mint(msg.sender, 1_000_000e18);
     }
 }
 
@@ -71,19 +71,10 @@ contract StableCoinUpgradeTest is Test {
 
         // Initialize contracts in the correct order
         vm.startPrank(owner);
-        
-        StableCoin(address(stableCoinProxy)).initialize(
-            "StableCoin",
-            "SC",
-            address(engineProxy),
-            owner
-        );
 
-        StableCoinEngine(address(engineProxy)).initialize(
-            address(collateralToken),
-            address(stableCoinProxy),
-            owner
-        );
+        StableCoin(address(stableCoinProxy)).initialize("StableCoin", "SC", address(engineProxy), owner);
+
+        StableCoinEngine(address(engineProxy)).initialize(address(collateralToken), address(stableCoinProxy), owner);
 
         vm.stopPrank();
     }
@@ -97,16 +88,16 @@ contract StableCoinUpgradeTest is Test {
 
     function test_OnlyAdminCanUpgrade() public {
         MockV2StableCoin newImpl = new MockV2StableCoin();
-        
+
         // Try to upgrade from non-admin account
         vm.prank(user1);
         vm.expectRevert();
         proxyAdmin.upgrade(ITransparentUpgradeableProxy(address(stableCoinProxy)), address(newImpl));
-        
+
         // Upgrade from admin account should succeed
         vm.prank(owner);
         proxyAdmin.upgrade(ITransparentUpgradeableProxy(address(stableCoinProxy)), address(newImpl));
-        
+
         assertEq(MockV2StableCoin(address(stableCoinProxy)).version(), 2);
     }
 
@@ -114,12 +105,12 @@ contract StableCoinUpgradeTest is Test {
         // Set up initial state
         vm.prank(address(engineProxy));
         StableCoin(address(stableCoinProxy)).mint(user1, 1000e18);
-        
+
         // Upgrade contract
         MockV2StableCoin newImpl = new MockV2StableCoin();
         vm.prank(owner);
         proxyAdmin.upgrade(ITransparentUpgradeableProxy(address(stableCoinProxy)), address(newImpl));
-        
+
         // Verify state is preserved
         assertEq(StableCoin(address(stableCoinProxy)).balanceOf(user1), 1000e18);
         assertEq(StableCoin(address(stableCoinProxy)).owner(), owner);
@@ -127,12 +118,12 @@ contract StableCoinUpgradeTest is Test {
 
     function test_UpgradeDoesNotAffectProxyAddress() public {
         address originalProxyAddress = address(stableCoinProxy);
-        
+
         // Upgrade to v2
         MockV2StableCoin newImpl = new MockV2StableCoin();
         vm.prank(owner);
         proxyAdmin.upgrade(ITransparentUpgradeableProxy(address(stableCoinProxy)), address(newImpl));
-        
+
         // Check proxy address remains the same
         assertEq(address(stableCoinProxy), originalProxyAddress);
     }
@@ -140,13 +131,13 @@ contract StableCoinUpgradeTest is Test {
     function test_UpgradeStableCoin() public {
         // Deploy new implementation
         MockV2StableCoin newImpl = new MockV2StableCoin();
-        
+
         vm.prank(owner);
         proxyAdmin.upgrade(ITransparentUpgradeableProxy(address(stableCoinProxy)), address(newImpl));
-        
+
         // Check upgrade was successful
         assertEq(MockV2StableCoin(address(stableCoinProxy)).version(), 2);
-        
+
         // Verify original data is preserved
         assertEq(StableCoin(address(stableCoinProxy)).name(), "StableCoin");
         assertEq(StableCoin(address(stableCoinProxy)).symbol(), "SC");
@@ -156,10 +147,10 @@ contract StableCoinUpgradeTest is Test {
     function test_UpgradeStableCoinEngine() public {
         // Deploy new implementation
         MockV2StableCoinEngine newImpl = new MockV2StableCoinEngine();
-        
+
         vm.prank(owner);
         proxyAdmin.upgrade(ITransparentUpgradeableProxy(address(engineProxy)), address(newImpl));
-        
+
         // Check upgrade was successful
         assertEq(MockV2StableCoinEngine(address(engineProxy)).version(), 2);
         assertEq(StableCoinEngine(address(engineProxy)).owner(), owner);
@@ -167,11 +158,6 @@ contract StableCoinUpgradeTest is Test {
 
     function test_RevertOnDoubleInitialization() public {
         vm.expectRevert("Initializable: contract is already initialized");
-        StableCoin(address(stableCoinProxy)).initialize(
-            "StableCoin",
-            "SC",
-            address(engineProxy),
-            owner
-        );
+        StableCoin(address(stableCoinProxy)).initialize("StableCoin", "SC", address(engineProxy), owner);
     }
 }

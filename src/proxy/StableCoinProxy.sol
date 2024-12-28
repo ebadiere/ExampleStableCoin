@@ -8,7 +8,10 @@ contract StableCoinProxy is TransparentUpgradeableProxy {
         address _logic,
         address admin_,
         bytes memory _data
-    ) payable TransparentUpgradeableProxy(_logic, admin_, _data) {}
+    )
+        payable
+        TransparentUpgradeableProxy(_logic, admin_, _data)
+    { }
 
     function implementation() external view returns (address) {
         return _implementation();

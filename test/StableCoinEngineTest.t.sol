@@ -12,7 +12,7 @@ import "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.so
 contract MockCollateralToken is ERC20Upgradeable {
     function initialize() external initializer {
         __ERC20_init("Mock Token", "MTK");
-        _mint(msg.sender, 1000000e18);
+        _mint(msg.sender, 1_000_000e18);
     }
 }
 
@@ -58,19 +58,10 @@ contract StableCoinEngineTest is Test {
 
         // Initialize contracts in the correct order
         vm.startPrank(owner);
-        
-        StableCoin(address(stableCoinProxy)).initialize(
-            "StableCoin",
-            "SC",
-            address(engineProxy),
-            owner
-        );
 
-        StableCoinEngine(address(engineProxy)).initialize(
-            address(collateral),
-            address(stableCoinProxy),
-            owner
-        );
+        StableCoin(address(stableCoinProxy)).initialize("StableCoin", "SC", address(engineProxy), owner);
+
+        StableCoinEngine(address(engineProxy)).initialize(address(collateral), address(stableCoinProxy), owner);
 
         // Set initial price
         StableCoinEngine(address(engineProxy)).updatePrice(1000e8); // $1000 per token
@@ -91,13 +82,13 @@ contract StableCoinEngineTest is Test {
 
     function test_Deposit() public {
         uint256 depositAmount = 100e18;
-        
+
         vm.startPrank(user1);
         collateral.approve(address(engineProxy), depositAmount);
         engine.deposit(depositAmount);
         vm.stopPrank();
-        
-        (uint256 collateralAmount, , , ) = engine.positions(user1);
+
+        (uint256 collateralAmount,,,) = engine.positions(user1);
         assertEq(collateralAmount, depositAmount);
         assertEq(collateral.balanceOf(address(engineProxy)), depositAmount);
     }
@@ -105,13 +96,13 @@ contract StableCoinEngineTest is Test {
     function test_Mint() public {
         uint256 depositAmount = 100e18;
         uint256 mintAmount = 50e18;
-        
+
         vm.startPrank(user1);
         collateral.approve(address(engineProxy), depositAmount);
         engine.depositAndMint(depositAmount, mintAmount);
         vm.stopPrank();
-        
-        (uint256 collateralAmount, uint256 debtAmount, , ) = engine.positions(user1);
+
+        (uint256 collateralAmount, uint256 debtAmount,,) = engine.positions(user1);
         assertEq(collateralAmount, depositAmount);
         assertEq(debtAmount, mintAmount);
         assertEq(stableCoin.balanceOf(user1), mintAmount);
@@ -121,14 +112,14 @@ contract StableCoinEngineTest is Test {
         uint256 depositAmount = 100e18;
         uint256 mintAmount = 50e18;
         uint256 burnAmount = 30e18;
-        
+
         vm.startPrank(user1);
         collateral.approve(address(engineProxy), depositAmount);
         engine.depositAndMint(depositAmount, mintAmount);
         engine.burn(burnAmount);
         vm.stopPrank();
-        
-        (, uint256 debtAmount, , ) = engine.positions(user1);
+
+        (, uint256 debtAmount,,) = engine.positions(user1);
         assertEq(debtAmount, mintAmount - burnAmount);
         assertEq(stableCoin.balanceOf(user1), mintAmount - burnAmount);
     }
@@ -136,14 +127,14 @@ contract StableCoinEngineTest is Test {
     function test_Withdraw() public {
         uint256 depositAmount = 100e18;
         uint256 withdrawAmount = 50e18;
-        
+
         vm.startPrank(user1);
         collateral.approve(address(engineProxy), depositAmount);
         engine.deposit(depositAmount);
         engine.withdraw(withdrawAmount);
         vm.stopPrank();
-        
-        (uint256 collateralAmount, , , ) = engine.positions(user1);
+
+        (uint256 collateralAmount,,,) = engine.positions(user1);
         assertEq(collateralAmount, depositAmount - withdrawAmount);
         assertEq(collateral.balanceOf(address(engineProxy)), depositAmount - withdrawAmount);
         assertEq(collateral.balanceOf(user1), 1000e18 - depositAmount + withdrawAmount);
@@ -154,14 +145,14 @@ contract StableCoinEngineTest is Test {
         uint256 mintAmount = 50e18;
         uint256 burnAmount = 30e18;
         uint256 withdrawAmount = 40e18;
-        
+
         vm.startPrank(user1);
         collateral.approve(address(engineProxy), depositAmount);
         engine.depositAndMint(depositAmount, mintAmount);
         engine.burnAndWithdraw(burnAmount, withdrawAmount);
         vm.stopPrank();
-        
-        (uint256 collateralAmount, uint256 debtAmount, , ) = engine.positions(user1);
+
+        (uint256 collateralAmount, uint256 debtAmount,,) = engine.positions(user1);
         assertEq(collateralAmount, depositAmount - withdrawAmount);
         assertEq(debtAmount, mintAmount - burnAmount);
         assertEq(stableCoin.balanceOf(user1), mintAmount - burnAmount);
@@ -173,7 +164,7 @@ contract StableCoinEngineTest is Test {
         vm.startPrank(user1);
         collateral.approve(address(engineProxy), 100e18);
         engine.deposit(100e18);
-        
+
         // Calculate max debt allowed:
         // 100e18 collateral * 1000e8 price/token = 100_000e26 total value
         // 100_000e26 * 150/100 = 150_000e26 adjusted value
@@ -190,7 +181,7 @@ contract StableCoinEngineTest is Test {
         collateral.approve(address(engineProxy), 100e18);
         engine.deposit(100e18);
         engine.mint(50e18);
-        
+
         vm.expectRevert(abi.encodeWithSignature("InsufficientDebt()"));
         engine.burn(51e18); // Try to burn more than minted
         vm.stopPrank();
@@ -198,13 +189,13 @@ contract StableCoinEngineTest is Test {
 
     function test_OnlyOwnerCanUpdatePrice() public {
         uint256 newPrice = 2000e8;
-        
+
         vm.expectRevert("Ownable: caller is not the owner");
         engine.updatePrice(newPrice);
-        
+
         vm.prank(owner);
         engine.updatePrice(newPrice);
-        
+
         assertEq(engine.getTWAP(), newPrice);
     }
 }

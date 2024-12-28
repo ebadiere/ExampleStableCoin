@@ -11,7 +11,7 @@ import "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 contract MockCollateralToken is ERC20Upgradeable {
     function initialize() external initializer {
         __ERC20_init("Mock Token", "MTK");
-        _mint(msg.sender, 1000000e18);
+        _mint(msg.sender, 1_000_000e18);
     }
 }
 
@@ -63,19 +63,10 @@ contract StableCoinEngineUpgradeTest is Test {
 
         // Initialize contracts in the correct order
         vm.startPrank(owner);
-        
-        StableCoin(address(stableCoinProxy)).initialize(
-            "StableCoin",
-            "SC",
-            address(engineProxy),
-            owner
-        );
 
-        StableCoinEngine(address(engineProxy)).initialize(
-            address(collateral),
-            address(stableCoinProxy),
-            owner
-        );
+        StableCoin(address(stableCoinProxy)).initialize("StableCoin", "SC", address(engineProxy), owner);
+
+        StableCoinEngine(address(engineProxy)).initialize(address(collateral), address(stableCoinProxy), owner);
 
         // Update references to use proxies
         stableCoin = StableCoin(address(stableCoinProxy));
@@ -93,10 +84,10 @@ contract StableCoinEngineUpgradeTest is Test {
     function test_UpgradeEngine() public {
         // Deploy new implementation
         MockV2StableCoinEngine newImpl = new MockV2StableCoinEngine();
-        
+
         vm.prank(owner);
         proxyAdmin.upgrade(ITransparentUpgradeableProxy(address(engineProxy)), address(newImpl));
-        
+
         // Check upgrade was successful
         assertEq(MockV2StableCoinEngine(address(engineProxy)).version(), 2);
         assertEq(StableCoinEngine(address(engineProxy)).owner(), owner);
@@ -104,11 +95,7 @@ contract StableCoinEngineUpgradeTest is Test {
 
     function test_RevertOnDoubleInitialization() public {
         vm.expectRevert("Initializable: contract is already initialized");
-        StableCoinEngine(address(engineProxy)).initialize(
-            address(collateral),
-            address(stableCoin),
-            owner
-        );
+        StableCoinEngine(address(engineProxy)).initialize(address(collateral), address(stableCoin), owner);
     }
 
     function test_StorageLayoutPreserved() public {
@@ -117,17 +104,17 @@ contract StableCoinEngineUpgradeTest is Test {
         collateral.approve(address(engineProxy), 1000e18);
         engineImpl.deposit(1000e18);
         vm.stopPrank();
-        
+
         // Upgrade contract
         MockV2StableCoinEngine newImpl = new MockV2StableCoinEngine();
         vm.prank(owner);
         proxyAdmin.upgrade(ITransparentUpgradeableProxy(address(engineProxy)), address(newImpl));
-        
+
         // Verify state is preserved
         assertEq(address(engineImpl.collateralToken()), address(collateral));
         assertEq(address(engineImpl.stableCoin()), address(stableCoin));
         assertEq(engineImpl.owner(), owner);
-        (uint256 collateralAmount,,, ) = engineImpl.positions(user1);
+        (uint256 collateralAmount,,,) = engineImpl.positions(user1);
         assertEq(collateralAmount, 1000e18);
     }
 }

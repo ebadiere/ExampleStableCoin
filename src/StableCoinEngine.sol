@@ -17,7 +17,7 @@ contract StableCoinEngine is Initializable, OwnableUpgradeable {
 
     mapping(address => Position) public positions;
     address[] private userList;
-    
+
     IERC20Upgradeable public collateralToken;
     StableCoin public stableCoin;
 
@@ -41,10 +41,7 @@ contract StableCoinEngine is Initializable, OwnableUpgradeable {
     event Burn(address indexed user, uint256 amount);
     event PriceUpdated(uint256 newPrice);
     event PositionLiquidated(
-        address indexed user,
-        address indexed liquidator,
-        uint256 debtAmount,
-        uint256 collateralAmount
+        address indexed user, address indexed liquidator, uint256 debtAmount, uint256 collateralAmount
     );
 
     error ZeroAmount();
@@ -56,13 +53,9 @@ contract StableCoinEngine is Initializable, OwnableUpgradeable {
     error ZeroAddress();
     error InvalidERC20();
 
-    function initialize(
-        address _collateralToken,
-        address _stableCoin,
-        address _owner
-    ) external initializer {
+    function initialize(address _collateralToken, address _stableCoin, address _owner) external initializer {
         __Ownable_init();
-        
+
         if (_collateralToken == address(0) || _stableCoin == address(0) || _owner == address(0)) {
             revert ZeroAddress();
         }
@@ -137,10 +130,7 @@ contract StableCoinEngine is Initializable, OwnableUpgradeable {
     }
 
     function updatePrice(uint256 newPrice) external onlyOwner {
-        observations.push(Observation({
-            timestamp: block.timestamp,
-            price: newPrice
-        }));
+        observations.push(Observation({ timestamp: block.timestamp, price: newPrice }));
         emit PriceUpdated(newPrice);
     }
 
@@ -161,21 +151,21 @@ contract StableCoinEngine is Initializable, OwnableUpgradeable {
     function _withdraw(uint256 amount) internal {
         Position storage position = positions[msg.sender];
         if (position.collateralAmount < amount) revert InsufficientCollateral();
-        
+
         position.collateralAmount -= amount;
         collateralToken.safeTransfer(msg.sender, amount);
-        
+
         if (position.debtAmount > 0) {
             if (!_hasEnoughCollateral(msg.sender, 0)) revert HealthFactorTooLow();
         }
-        
+
         emit Withdraw(msg.sender, amount);
     }
 
     function _burn(uint256 amount) internal {
         Position storage position = positions[msg.sender];
         if (position.debtAmount < amount) revert InsufficientDebt();
-        
+
         position.debtAmount -= amount;
         stableCoin.burn(msg.sender, amount);
         emit Burn(msg.sender, amount);
@@ -190,10 +180,7 @@ contract StableCoinEngine is Initializable, OwnableUpgradeable {
     function _updatePosition(address user) internal {
         Position storage position = positions[user];
         position.lastInteractionTime = block.timestamp;
-        position.lastHealthFactor = _calculateHealthFactor(
-            position.collateralAmount,
-            position.debtAmount
-        );
+        position.lastHealthFactor = _calculateHealthFactor(position.collateralAmount, position.debtAmount);
     }
 
     function _hasEnoughCollateral(address user, uint256 additionalDebt) internal view returns (bool) {
@@ -201,10 +188,7 @@ contract StableCoinEngine is Initializable, OwnableUpgradeable {
         uint256 totalDebt = position.debtAmount + additionalDebt;
         if (totalDebt == 0) return true;
 
-        uint256 healthFactor = _calculateHealthFactor(
-            position.collateralAmount,
-            totalDebt
-        );
+        uint256 healthFactor = _calculateHealthFactor(position.collateralAmount, totalDebt);
         return healthFactor >= MIN_HEALTH_FACTOR;
     }
 
@@ -217,14 +201,14 @@ contract StableCoinEngine is Initializable, OwnableUpgradeable {
 
     function getTWAP() public view returns (uint256) {
         if (observations.length == 0) revert PriceTooOld();
-        
+
         uint256 length = observations.length;
         Observation memory lastObservation = observations[length - 1];
-        
+
         if (block.timestamp - lastObservation.timestamp > MAX_PRICE_AGE) {
             revert PriceTooOld();
         }
-        
+
         return lastObservation.price;
     }
 
@@ -239,11 +223,8 @@ contract StableCoinEngine is Initializable, OwnableUpgradeable {
     function isLiquidatable(address user) public view returns (bool) {
         Position memory position = positions[user];
         if (position.debtAmount == 0) return false;
-        
-        uint256 healthFactor = _calculateHealthFactor(
-            position.collateralAmount,
-            position.debtAmount
-        );
+
+        uint256 healthFactor = _calculateHealthFactor(position.collateralAmount, position.debtAmount);
         return healthFactor < MIN_HEALTH_FACTOR;
     }
 

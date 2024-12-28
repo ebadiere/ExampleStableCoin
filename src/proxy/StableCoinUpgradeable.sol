@@ -15,16 +15,12 @@ contract StableCoinUpgradeable is ERC20Upgradeable, OwnableUpgradeable {
         _;
     }
 
-    function initialize(
-        string memory name,
-        string memory symbol,
-        address _engine
-    ) external initializer {
+    function initialize(string memory name, string memory symbol, address _engine) external initializer {
         if (_engine == address(0)) revert ZeroAddress();
-        
+
         __ERC20_init(name, symbol);
         __Ownable_init();
-        
+
         engine = _engine;
     }
 

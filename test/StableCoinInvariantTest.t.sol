@@ -11,7 +11,7 @@ import "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 contract MockCollateralToken is ERC20Upgradeable {
     function initialize() external initializer {
         __ERC20_init("Mock Token", "MTK");
-        _mint(msg.sender, 1000000e18);
+        _mint(msg.sender, 1_000_000e18);
     }
 }
 
@@ -41,31 +41,16 @@ contract Handler is Test {
         engine = new StableCoinEngine();
 
         // Prepare initialization data
-        bytes memory stableCoinData = abi.encodeWithSelector(
-            StableCoin.initialize.selector,
-            "StableCoin",
-            "SC",
-            address(engine)
-        );
+        bytes memory stableCoinData =
+            abi.encodeWithSelector(StableCoin.initialize.selector, "StableCoin", "SC", address(engine));
 
-        bytes memory engineData = abi.encodeWithSelector(
-            StableCoinEngine.initialize.selector,
-            address(collateral),
-            address(stableCoin)
-        );
+        bytes memory engineData =
+            abi.encodeWithSelector(StableCoinEngine.initialize.selector, address(collateral), address(stableCoin));
 
         // Deploy proxies
-        stableCoinProxy = new StableCoinProxy(
-            address(stableCoin),
-            address(proxyAdmin),
-            stableCoinData
-        );
+        stableCoinProxy = new StableCoinProxy(address(stableCoin), address(proxyAdmin), stableCoinData);
 
-        engineProxy = new StableCoinProxy(
-            address(engine),
-            address(proxyAdmin),
-            engineData
-        );
+        engineProxy = new StableCoinProxy(address(engine), address(proxyAdmin), engineData);
 
         // Update references to use proxies
         stableCoin = StableCoin(address(stableCoinProxy));
@@ -115,7 +100,7 @@ contract Handler is Test {
     function liquidate() public {
         if (engine.isLiquidatable(user1)) {
             vm.startPrank(user2);
-            (,uint256 debtAmount,,) = engine.positions(user1);
+            (, uint256 debtAmount,,) = engine.positions(user1);
             if (debtAmount > 0) {
                 deal(address(stableCoin), user2, debtAmount);
                 stableCoin.approve(address(engine), debtAmount);
@@ -166,19 +151,10 @@ contract StableCoinInvariantTest is Test {
 
         // Initialize contracts in the correct order
         vm.startPrank(owner);
-        
-        StableCoin(address(stableCoinProxy)).initialize(
-            "StableCoin",
-            "SC",
-            address(engineProxy),
-            owner
-        );
 
-        StableCoinEngine(address(engineProxy)).initialize(
-            address(collateral),
-            address(stableCoinProxy),
-            owner
-        );
+        StableCoin(address(stableCoinProxy)).initialize("StableCoin", "SC", address(engineProxy), owner);
+
+        StableCoinEngine(address(engineProxy)).initialize(address(collateral), address(stableCoinProxy), owner);
 
         // Set initial price
         StableCoinEngine(address(engineProxy)).updatePrice(1000e18); // $1000 per token
@@ -194,42 +170,39 @@ contract StableCoinInvariantTest is Test {
         uint256 totalSupply = stableCoin.totalSupply();
         uint256 totalDebt = 0;
         address[] memory users = engine.getUsers();
-        
+
         for (uint256 i = 0; i < users.length; i++) {
-            (,uint256 debtAmount,,) = engine.positions(users[i]);
+            (, uint256 debtAmount,,) = engine.positions(users[i]);
             totalDebt += debtAmount;
         }
-        
+
         assertEq(totalSupply, totalDebt, "Total supply should equal total debt");
     }
 
     function invariant_collateralBalanceMatchesPositions() public {
         uint256 totalCollateral = 0;
         address[] memory users = engine.getUsers();
-        
+
         for (uint256 i = 0; i < users.length; i++) {
             (uint256 collateralAmount,,,) = engine.positions(users[i]);
             totalCollateral += collateralAmount;
         }
-        
+
         assertEq(
-            collateral.balanceOf(address(engineProxy)), 
-            totalCollateral, 
+            collateral.balanceOf(address(engineProxy)),
+            totalCollateral,
             "Engine collateral balance should match sum of positions"
         );
     }
 
     function invariant_healthFactorsAboveMinimum() public {
         address[] memory users = engine.getUsers();
-        
+
         for (uint256 i = 0; i < users.length; i++) {
             (uint256 collateralAmount, uint256 debtAmount,,) = engine.positions(users[i]);
             if (debtAmount > 0) {
                 // Check if position is liquidatable, which means health factor is below minimum
-                assertFalse(
-                    engine.isLiquidatable(users[i]),
-                    "Health factor below minimum"
-                );
+                assertFalse(engine.isLiquidatable(users[i]), "Health factor below minimum");
             }
         }
     }

@@ -45,13 +45,8 @@ contract StableCoinTest is Test {
 
         // Initialize contracts in the correct order
         vm.startPrank(owner);
-        
-        StableCoin(address(stableCoinProxy)).initialize(
-            "StableCoin",
-            "SC",
-            address(engineProxy),
-            owner
-        );
+
+        StableCoin(address(stableCoinProxy)).initialize("StableCoin", "SC", address(engineProxy), owner);
 
         StableCoinEngine(address(engineProxy)).initialize(
             address(0x2), // Mock collateral token
@@ -75,39 +70,39 @@ contract StableCoinTest is Test {
 
     function testMint() public {
         uint256 amount = 100e18;
-        
+
         vm.prank(address(engineProxy));
         stableCoin.mint(user, amount);
-        
+
         assertEq(stableCoin.balanceOf(user), amount);
     }
 
     function testBurn() public {
         uint256 amount = 100e18;
-        
+
         // First mint some tokens
         vm.prank(address(engineProxy));
         stableCoin.mint(user, amount);
-        
+
         // Then burn them
         vm.prank(address(engineProxy));
         stableCoin.burn(user, amount);
-        
+
         assertEq(stableCoin.balanceOf(user), 0);
     }
 
     function testTransfer() public {
         uint256 amount = 100e18;
         address recipient = address(0x2);
-        
+
         // First mint some tokens
         vm.prank(address(engineProxy));
         stableCoin.mint(user, amount);
-        
+
         // Then transfer them
         vm.prank(user);
         stableCoin.transfer(recipient, amount);
-        
+
         assertEq(stableCoin.balanceOf(user), 0);
         assertEq(stableCoin.balanceOf(recipient), amount);
     }
@@ -115,10 +110,10 @@ contract StableCoinTest is Test {
     function testApprove() public {
         uint256 amount = 100e18;
         address spender = address(0x2);
-        
+
         vm.prank(user);
         stableCoin.approve(spender, amount);
-        
+
         assertEq(stableCoin.allowance(user, spender), amount);
     }
 
@@ -126,19 +121,19 @@ contract StableCoinTest is Test {
         uint256 amount = 100e18;
         address spender = address(0x2);
         address recipient = address(0x3);
-        
+
         // First mint some tokens
         vm.prank(address(engineProxy));
         stableCoin.mint(user, amount);
-        
+
         // Then approve spender
         vm.prank(user);
         stableCoin.approve(spender, amount);
-        
+
         // Then transfer from user to recipient
         vm.prank(spender);
         stableCoin.transferFrom(user, recipient, amount);
-        
+
         assertEq(stableCoin.balanceOf(user), 0);
         assertEq(stableCoin.balanceOf(recipient), amount);
         assertEq(stableCoin.allowance(user, spender), 0);
@@ -147,13 +142,13 @@ contract StableCoinTest is Test {
     function testFuzzingTransfer(uint256 amount) public {
         vm.assume(amount > 0);
         address recipient = address(0x2);
-        
+
         vm.prank(address(engineProxy));
         stableCoin.mint(user, amount);
-        
+
         vm.prank(user);
         stableCoin.transfer(recipient, amount);
-        
+
         assertEq(stableCoin.balanceOf(user), 0);
         assertEq(stableCoin.balanceOf(recipient), amount);
     }
@@ -162,16 +157,16 @@ contract StableCoinTest is Test {
         vm.assume(amount > 0 && amount < type(uint256).max);
         address spender = address(0x2);
         address recipient = address(0x3);
-        
+
         vm.prank(address(engineProxy));
         stableCoin.mint(user, amount);
-        
+
         vm.prank(user);
         stableCoin.approve(spender, amount);
-        
+
         vm.prank(spender);
         stableCoin.transferFrom(user, recipient, amount);
-        
+
         assertEq(stableCoin.balanceOf(user), 0);
         assertEq(stableCoin.balanceOf(recipient), amount);
         assertEq(stableCoin.allowance(user, spender), 0);
@@ -193,10 +188,10 @@ contract StableCoinTest is Test {
 
     function test_BurnExceedsBalance() public {
         uint256 amount = 100e18;
-        
+
         vm.prank(address(engineProxy));
         stableCoin.mint(user, amount);
-        
+
         vm.prank(address(engineProxy));
         vm.expectRevert("ERC20: burn amount exceeds balance");
         stableCoin.burn(user, amount + 1);
