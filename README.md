@@ -9,6 +9,7 @@ A decentralized stablecoin implementation that uses over-collateralization and l
 - **Liquidation System**: Automatically liquidates unsafe positions to maintain system solvency
 - **Risk Parameters**: Configurable parameters for collateral ratio, liquidation thresholds, and price feed staleness
 - **ERC20 Compliant**: Both the stablecoin and collateral tokens follow the ERC20 standard
+- **Upgradeable**: Uses the UUPS (Universal Upgradeable Proxy Standard) pattern for contract upgrades
 
 ## Core Components
 
@@ -16,12 +17,19 @@ A decentralized stablecoin implementation that uses over-collateralization and l
 - ERC20-compliant stablecoin token
 - Controlled minting and burning by the StableCoinEngine
 - Role-based access control for secure operation
+- Upgradeable using UUPS proxy pattern
 
 ### StableCoinEngine.sol
 - Manages collateral deposits and stablecoin minting
 - Implements TWAP oracle for price feeds
 - Handles liquidations of unsafe positions
 - Enforces system risk parameters
+- Upgradeable using UUPS proxy pattern
+
+### StableCoinProxy.sol
+- Transparent proxy implementation for UUPS upgrades
+- Delegates all calls to the implementation contract
+- Maintains separation between storage and logic
 
 ## Key Parameters
 
@@ -57,6 +65,7 @@ The test suite includes comprehensive tests for:
 - Price feed mechanics
 - Liquidation scenarios
 - Edge cases and error conditions
+- Contract upgrades and proxy patterns
 
 ### Formatting
 
@@ -71,6 +80,28 @@ $ forge fmt
 - Maximum price change limits
 - Collateral ratio safety margins
 - Liquidation incentives for system stability
+- Secure upgrade pattern using UUPS proxies
+- Owner-controlled upgrade functionality
+- Storage layout protection for upgrades
+
+## Architecture
+
+### Upgrade Pattern
+
+The project uses the UUPS (Universal Upgradeable Proxy Standard) pattern for contract upgrades:
+
+1. **Proxy Contracts**: `StableCoinProxy` serves as the proxy that delegates calls to the implementation
+2. **Implementation Contracts**: `StableCoin` and `StableCoinEngine` contain the logic
+3. **Storage**: Utilizes OpenZeppelin's unstructured storage pattern to prevent storage collisions
+4. **Access Control**: Only the owner can perform upgrades
+5. **Initialization**: Uses `initialize` functions instead of constructors for proper proxy initialization
+
+### Upgrade Process
+
+1. Deploy new implementation contract
+2. Owner calls upgrade function on the proxy
+3. Proxy updates its implementation pointer
+4. State is preserved while logic is updated
 
 ## License
 
@@ -141,4 +172,3 @@ $ cast <subcommand>
 $ forge --help
 $ anvil --help
 $ cast --help
-```
