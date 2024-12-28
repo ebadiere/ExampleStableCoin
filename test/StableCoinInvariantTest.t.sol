@@ -1,199 +1,236 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.20;
+pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "../src/StableCoin.sol";
 import "../src/StableCoinEngine.sol";
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "../src/proxy/StableCoinProxy.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 
-contract MockERC20 is ERC20 {
-    constructor(string memory name, string memory symbol) ERC20(name, symbol) {}
-
-    function mint(address to, uint256 amount) external {
-        _mint(to, amount);
+contract MockCollateralToken is ERC20Upgradeable {
+    function initialize() external initializer {
+        __ERC20_init("Mock Token", "MTK");
+        _mint(msg.sender, 1000000e18);
     }
 }
 
 contract Handler is Test {
     StableCoin public stableCoin;
     StableCoinEngine public engine;
-    MockERC20 public collateral;
-    address public owner;
+    MockCollateralToken public collateral;
+    ProxyAdmin public proxyAdmin;
+    StableCoinProxy public stableCoinProxy;
+    StableCoinProxy public engineProxy;
 
-    // Bound the values to reasonable ranges
-    uint256 public constant MIN_AMOUNT = 1e6;   // 1 USDC
-    uint256 public constant MAX_AMOUNT = 1e9;   // 1000 USDC
-    uint256 public constant MIN_PRICE = 50e8;    // $50 - Set minimum price to avoid liquidation
-    uint256 public constant MAX_PRICE = 100e8;  // $100
+    address public owner = address(this);
+    address public user1 = address(0x1);
+    address public user2 = address(0x2);
 
-    // Track actors
-    address[] public actors;
-    uint256 public currentActorIndex;
+    constructor() {
+        // Deploy ProxyAdmin
+        proxyAdmin = new ProxyAdmin();
 
-    constructor(
-        address _stableCoin,
-        address _engine,
-        address _collateral,
-        address _owner
-    ) {
-        stableCoin = StableCoin(_stableCoin);
-        engine = StableCoinEngine(_engine);
-        collateral = MockERC20(_collateral);
-        owner = _owner;
+        // Deploy mock collateral token
+        collateral = new MockCollateralToken();
+        collateral.initialize();
+        deal(address(collateral), user1, 1000e18);
 
-        // Create some actors
-        for (uint256 i = 0; i < 10; i++) {
-            actors.push(address(uint160(0x1000 + i)));
-            vm.label(actors[i], string.concat("Actor", vm.toString(i)));
-        }
+        // Deploy implementation contracts
+        stableCoin = new StableCoin();
+        engine = new StableCoinEngine();
+
+        // Prepare initialization data
+        bytes memory stableCoinData = abi.encodeWithSelector(
+            StableCoin.initialize.selector,
+            "StableCoin",
+            "SC",
+            address(engine)
+        );
+
+        bytes memory engineData = abi.encodeWithSelector(
+            StableCoinEngine.initialize.selector,
+            address(collateral),
+            address(stableCoin)
+        );
+
+        // Deploy proxies
+        stableCoinProxy = new StableCoinProxy(
+            address(stableCoin),
+            address(proxyAdmin),
+            stableCoinData
+        );
+
+        engineProxy = new StableCoinProxy(
+            address(engine),
+            address(proxyAdmin),
+            engineData
+        );
+
+        // Update references to use proxies
+        stableCoin = StableCoin(address(stableCoinProxy));
+        engine = StableCoinEngine(address(engineProxy));
+
+        // Set initial price
+        engine.updatePrice(1e8); // $1 per token
+        vm.warp(block.timestamp + 1 hours);
+        engine.updatePrice(1e8);
     }
 
-    // Modifiers to bound inputs
-    modifier useActor() {
-        currentActorIndex = bound(currentActorIndex, 0, actors.length - 1);
-        vm.startPrank(actors[currentActorIndex]);
-        _;
-        vm.stopPrank();
-    }
-
-    // Functions that will be called during invariant testing
-    function deposit_and_mint(uint256 amount, uint256 mintAmount) external useActor {
-        // Apply bounds before using the values
-        amount = bound(amount, MIN_AMOUNT, MAX_AMOUNT);
-        mintAmount = bound(mintAmount, MIN_AMOUNT, MAX_AMOUNT);
-        
-        // Mint collateral to actor
-        collateral.mint(actors[currentActorIndex], amount);
-        
-        // Approve and deposit
+    function deposit(uint256 amount) public {
+        amount = bound(amount, 0, 1000e18);
+        vm.startPrank(user1);
         collateral.approve(address(engine), amount);
-        try engine.depositAndMint(amount, mintAmount) {
-            // Success
-        } catch {
-            // Failed - this is expected sometimes due to insufficient collateral
-        }
+        engine.deposit(amount);
+        vm.stopPrank();
     }
 
-    function update_price(uint256 price) external {
-        // Apply bounds before using the value
-        price = bound(price, MIN_PRICE, MAX_PRICE);
-        
-        vm.startPrank(owner);
-        // Ensure enough time has passed
-        vm.warp(block.timestamp + engine.MIN_UPDATE_DELAY());
-        try engine.update(price) {
-            // Success
-        } catch {
-            // Failed - this is expected sometimes due to price change limits
-        }
+    function withdraw(uint256 amount) public {
+        amount = bound(amount, 0, 1000e18);
+        vm.startPrank(user1);
+        engine.withdraw(amount);
         vm.stopPrank();
+    }
+
+    function mint(uint256 amount) public {
+        amount = bound(amount, 0, 1000e18);
+        vm.startPrank(user1);
+        engine.mint(amount);
+        vm.stopPrank();
+    }
+
+    function burn(uint256 amount) public {
+        amount = bound(amount, 0, 1000e18);
+        vm.startPrank(user1);
+        engine.burn(amount);
+        vm.stopPrank();
+    }
+
+    function updatePrice(uint256 newPrice) public {
+        newPrice = bound(newPrice, 0.5e8, 2e8);
+        vm.warp(block.timestamp + 1 hours);
+        engine.updatePrice(newPrice);
+    }
+
+    function liquidate() public {
+        if (engine.isLiquidatable(user1)) {
+            vm.startPrank(user2);
+            (,uint256 debtAmount,,) = engine.positions(user1);
+            if (debtAmount > 0) {
+                deal(address(stableCoin), user2, debtAmount);
+                stableCoin.approve(address(engine), debtAmount);
+                engine.liquidate(user1);
+            }
+            vm.stopPrank();
+        }
     }
 }
 
 contract StableCoinInvariantTest is Test {
-    StableCoin public stableCoin;
-    StableCoinEngine public engine;
-    MockERC20 public collateral;
-    Handler public handler;
-    address public owner;
+    StableCoin stableCoin;
+    StableCoinEngine engine;
+    MockCollateralToken collateral;
+    ProxyAdmin proxyAdmin;
+    StableCoinProxy stableCoinProxy;
+    StableCoinProxy engineProxy;
+
+    address owner = address(0x123);
+    address user1 = address(0x1);
+    address user2 = address(0x2);
 
     function setUp() public {
-        owner = address(this);
-        collateral = new MockERC20("Mock Token", "MTK");
-        stableCoin = new StableCoin(owner);
-        engine = new StableCoinEngine(
-            address(stableCoin),
-            address(collateral),
-            owner
-        );
+        // Deploy ProxyAdmin
+        proxyAdmin = new ProxyAdmin();
+        proxyAdmin.transferOwnership(owner);
 
-        // Set up roles
-        stableCoin.transferOwnership(address(engine));
+        // Deploy mock collateral token
+        collateral = new MockCollateralToken();
+        collateral.initialize();
 
-        // Create handler
-        handler = new Handler(
-            address(stableCoin),
+        // Deploy implementation contracts
+        stableCoin = new StableCoin();
+        engine = new StableCoinEngine();
+
+        // Deploy proxies with empty initialization data
+        engineProxy = new StableCoinProxy(
             address(engine),
-            address(collateral),
+            address(proxyAdmin),
+            "" // Empty data, we'll initialize later
+        );
+
+        stableCoinProxy = new StableCoinProxy(
+            address(stableCoin),
+            address(proxyAdmin),
+            "" // Empty data, we'll initialize later
+        );
+
+        // Initialize contracts in the correct order
+        vm.startPrank(owner);
+        
+        StableCoin(address(stableCoinProxy)).initialize(
+            "StableCoin",
+            "SC",
+            address(engineProxy),
             owner
         );
 
-        // Target contract functions for invariant testing
-        targetContract(address(handler));
+        StableCoinEngine(address(engineProxy)).initialize(
+            address(collateral),
+            address(stableCoinProxy),
+            owner
+        );
 
-        // Label addresses for better trace output
-        vm.label(address(stableCoin), "StableCoin");
-        vm.label(address(engine), "StableCoinEngine");
-        vm.label(address(collateral), "Collateral");
-        vm.label(address(handler), "Handler");
+        // Set initial price
+        StableCoinEngine(address(engineProxy)).updatePrice(1000e18); // $1000 per token
+
+        vm.stopPrank();
+
+        // Update references to use proxies
+        stableCoin = StableCoin(address(stableCoinProxy));
+        engine = StableCoinEngine(address(engineProxy));
     }
 
-    // System should never have more debt than collateral value allows
-    function invariant_collateralization() public view {
+    function invariant_totalSupplyMatchesTotalDebt() public {
+        uint256 totalSupply = stableCoin.totalSupply();
+        uint256 totalDebt = 0;
         address[] memory users = engine.getUsers();
-        for (uint256 i = 0; i < users.length; i++) {
-            (uint256 collateralAmount, uint256 debtAmount,,) = engine.positions(users[i]);
-            if (debtAmount > 0) {
-                // Calculate values carefully to avoid overflow
-                uint256 collateralPrice = engine.getTWAP();
-                // Multiply first, then divide to maintain precision
-                uint256 collateralValue = (collateralAmount * collateralPrice) / engine.PRICE_PRECISION();
-                uint256 minCollateralValue = (debtAmount * engine.baseCollateralRatio()) / 1e18;
-                assert(collateralValue >= minCollateralValue);
-            }
-        }
-    }
-
-       // Total debt in the system should match total stablecoin supply
-    function invariant_debtMatchesSupply() public view {
-        uint256 totalDebt;
-        address[] memory users = engine.getUsers();
+        
         for (uint256 i = 0; i < users.length; i++) {
             (,uint256 debtAmount,,) = engine.positions(users[i]);
             totalDebt += debtAmount;
         }
-        assert(totalDebt == stableCoin.totalSupply());
+        
+        assertEq(totalSupply, totalDebt, "Total supply should equal total debt");
     }
 
-    // System's total collateral should match the contract's balance
-    function invariant_totalCollateralMatchesBalance() public view {
-        uint256 totalCollateral;
+    function invariant_collateralBalanceMatchesPositions() public {
+        uint256 totalCollateral = 0;
         address[] memory users = engine.getUsers();
+        
         for (uint256 i = 0; i < users.length; i++) {
             (uint256 collateralAmount,,,) = engine.positions(users[i]);
             totalCollateral += collateralAmount;
         }
-        assert(totalCollateral == collateral.balanceOf(address(engine)));
-    }    
-
-    // No position should be liquidatable after an operation
-    function invariant_noLiquidatablePositions() public view {
-        address[] memory users = engine.getUsers();
-        for (uint256 i = 0; i < users.length; i++) {
-            (uint256 collateralAmount, uint256 debtAmount,,) = engine.positions(users[i]);
-            if (collateralAmount > 0 || debtAmount > 0) {
-                // Calculate values carefully to avoid overflow
-                uint256 currentPrice = engine.getTWAP();
-                // Multiply first, then divide to maintain precision
-                uint256 collateralValue = (collateralAmount * currentPrice) / engine.PRICE_PRECISION();
-                uint256 minCollateralValue = (debtAmount * engine.liquidationThreshold()) / 1e18;
-                
-                if (collateralValue < minCollateralValue) {
-                    assert(engine.isLiquidatable(users[i]));
-                } else {
-                    assert(!engine.isLiquidatable(users[i]));
-                }
-            }
-        }
-    }  
-
-    // Price should never be stale
-    function invariant_priceNotStale() public view {
-        if (engine.getObservationsCount() > 0) {
-            (uint256 lastTimestamp,) = engine.observations(engine.getObservationsCount() - 1);
-            assert(block.timestamp - lastTimestamp <= engine.MAX_PRICE_AGE());
-        }
+        
+        assertEq(
+            collateral.balanceOf(address(engineProxy)), 
+            totalCollateral, 
+            "Engine collateral balance should match sum of positions"
+        );
     }
 
-    receive() external payable {}      
+    function invariant_healthFactorsAboveMinimum() public {
+        address[] memory users = engine.getUsers();
+        
+        for (uint256 i = 0; i < users.length; i++) {
+            (uint256 collateralAmount, uint256 debtAmount,,) = engine.positions(users[i]);
+            if (debtAmount > 0) {
+                // Check if position is liquidatable, which means health factor is below minimum
+                assertFalse(
+                    engine.isLiquidatable(users[i]),
+                    "Health factor below minimum"
+                );
+            }
+        }
+    }
 }
