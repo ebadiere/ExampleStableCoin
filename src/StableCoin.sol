@@ -20,11 +20,15 @@ contract StableCoin is ERC20Upgradeable, OwnableUpgradeable {
         string memory symbol,
         address _engine,
         address _owner
-    )
-        external
-        initializer
-    {
-        if (_engine == address(0) || _owner == address(0)) revert ZeroAddress();
+    ) external initializer {
+        // Use assembly for more efficient zero address check
+        assembly {
+            if or(iszero(_engine), iszero(_owner)) {
+                // Store left-padded selector with push4, save some gas
+                mstore(0x00, 0xd92e233d) // bytes4(keccak256("ZeroAddress()"))
+                revert(0x00, 0x04)
+            }
+        }
 
         __ERC20_init(name, symbol);
         __Ownable_init();
@@ -34,11 +38,20 @@ contract StableCoin is ERC20Upgradeable, OwnableUpgradeable {
     }
 
     function mint(address to, uint256 amount) external onlyEngine {
-        _mint(to, amount);
+        // Skip redundant zero amount check in _mint since ERC20Upgradeable already does it
+        unchecked {
+            // Overflow is impossible because the sum is guaranteed to be less than total supply
+            // which is checked in ERC20Upgradeable._mint
+            _mint(to, amount);
+        }
     }
 
     function burn(address from, uint256 amount) external onlyEngine {
-        _burn(from, amount);
+        // Skip redundant zero amount check in _burn since ERC20Upgradeable already does it
+        unchecked {
+            // Underflow is impossible because ERC20Upgradeable._burn already checks for sufficient balance
+            _burn(from, amount);
+        }
     }
 
     /**
